@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Текст ↔ Голос</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        font-family: Inter, Arial, sans-serif;
+        background: #f5f7ff;
+        color: #10223a;
+      }
+      .container {
+        max-width: 960px;
+        margin: 36px auto;
+        padding: 0 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #d7e0f2;
+        border-radius: 14px;
+        padding: 18px;
+        box-shadow: 0 8px 26px rgba(16, 34, 58, 0.08);
+      }
+      h1 { margin: 0 0 8px; }
+      p { margin: 0 0 12px; }
+      textarea, select, button {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 10px;
+        border: 1px solid #c6d3ec;
+        padding: 10px;
+        font: inherit;
+      }
+      textarea { resize: vertical; min-height: 120px; }
+      button {
+        cursor: pointer;
+        background: #216bff;
+        border: none;
+        color: #fff;
+        font-weight: 600;
+        margin-top: 10px;
+      }
+      button.secondary { background: #2f3d5a; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .row { display: flex; gap: 8px; }
+      .status {
+        margin-top: 10px;
+        background: #eef4ff;
+        border: 1px solid #c7dafd;
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .error {
+        background: #ffecee;
+        border-color: #f4b5bc;
+      }
+      .muted { color: #4b5e7b; font-size: 0.94rem; }
+      footer { margin-top: 16px; font-size: 0.85rem; color: #63748f; }
+      code { background: #eff2f8; padding: 1px 5px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>Приложение «Текст ↔ Голос»</h1>
+      <p class="muted">Работает в браузере без сервера: синтез речи и распознавание речи в текст.</p>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Текст → Голос</h2>
+          <label for="ttsText">Текст</label>
+          <textarea id="ttsText" placeholder="Введите текст для озвучивания..."></textarea>
+
+          <label for="ttsLang">Язык</label>
+          <select id="ttsLang">
+            <option value="ru-RU" selected>Русский (ru-RU)</option>
+            <option value="en-US">English (en-US)</option>
+            <option value="de-DE">Deutsch (de-DE)</option>
+          </select>
+
+          <div class="row">
+            <button id="speakBtn">Озвучить</button>
+            <button id="stopSpeakBtn" class="secondary" type="button">Стоп</button>
+          </div>
+          <div id="ttsStatus" class="status">Готово к озвучиванию.</div>
+        </article>
+
+        <article class="card">
+          <h2>Голос → Текст</h2>
+          <p class="muted">Нажмите «Начать запись», скажите фразу и нажмите «Остановить».</p>
+
+          <label for="sttLang">Язык распознавания</label>
+          <select id="sttLang">
+            <option value="ru-RU" selected>Русский (ru-RU)</option>
+            <option value="en-US">English (en-US)</option>
+          </select>
+
+          <div class="row">
+            <button id="startRecBtn">Начать запись</button>
+            <button id="stopRecBtn" class="secondary" type="button" disabled>Остановить</button>
+          </div>
+
+          <label for="sttResult">Результат</label>
+          <textarea id="sttResult" readonly placeholder="Здесь появится распознанный текст..."></textarea>
+          <button id="copyBtn" class="secondary" type="button">Копировать текст</button>
+          <div id="sttStatus" class="status">Готово к распознаванию.</div>
+        </article>
+      </section>
+
+      <footer>
+        Если распознавание не работает, проверьте поддержку <code>SpeechRecognition</code> в вашем браузере и доступ к микрофону.
+      </footer>
+    </main>
+
+    <script>
+      const ttsText = document.getElementById('ttsText');
+      const ttsLang = document.getElementById('ttsLang');
+      const speakBtn = document.getElementById('speakBtn');
+      const stopSpeakBtn = document.getElementById('stopSpeakBtn');
+      const ttsStatus = document.getElementById('ttsStatus');
+
+      const sttLang = document.getElementById('sttLang');
+      const startRecBtn = document.getElementById('startRecBtn');
+      const stopRecBtn = document.getElementById('stopRecBtn');
+      const sttResult = document.getElementById('sttResult');
+      const sttStatus = document.getElementById('sttStatus');
+      const copyBtn = document.getElementById('copyBtn');
+
+      const setStatus = (el, text, isError = false) => {
+        el.textContent = text;
+        el.classList.toggle('error', isError);
+      };
+
+      // Text to Speech
+      speakBtn.addEventListener('click', () => {
+        const text = ttsText.value.trim();
+        if (!text) {
+          setStatus(ttsStatus, 'Введите текст для озвучивания.', true);
+          return;
+        }
+        if (!('speechSynthesis' in window)) {
+          setStatus(ttsStatus, 'Браузер не поддерживает синтез речи.', true);
+          return;
+        }
+
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = ttsLang.value;
+        utterance.onstart = () => setStatus(ttsStatus, 'Озвучивание началось...');
+        utterance.onend = () => setStatus(ttsStatus, 'Озвучивание завершено.');
+        utterance.onerror = () => setStatus(ttsStatus, 'Ошибка синтеза речи.', true);
+        window.speechSynthesis.speak(utterance);
+      });
+
+      stopSpeakBtn.addEventListener('click', () => {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          setStatus(ttsStatus, 'Озвучивание остановлено.');
+        }
+      });
+
+      // Speech to Text
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recognition = null;
+
+      if (!SR) {
+        startRecBtn.disabled = true;
+        stopRecBtn.disabled = true;
+        setStatus(sttStatus, 'Браузер не поддерживает распознавание речи.', true);
+      } else {
+        recognition = new SR();
+        recognition.interimResults = true;
+        recognition.continuous = true;
+
+        recognition.onstart = () => {
+          setStatus(sttStatus, 'Идёт запись...');
+          startRecBtn.disabled = true;
+          stopRecBtn.disabled = false;
+        };
+
+        recognition.onresult = (event) => {
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          sttResult.value = (sttResult.value + ' ' + transcript).trim();
+        };
+
+        recognition.onerror = (event) => {
+          setStatus(sttStatus, `Ошибка распознавания: ${event.error}`, true);
+        };
+
+        recognition.onend = () => {
+          startRecBtn.disabled = false;
+          stopRecBtn.disabled = true;
+          setStatus(sttStatus, 'Распознавание остановлено.');
+        };
+
+        startRecBtn.addEventListener('click', () => {
+          recognition.lang = sttLang.value;
+          sttResult.value = '';
+          try {
+            recognition.start();
+          } catch {
+            setStatus(sttStatus, 'Не удалось запустить распознавание. Попробуйте снова.', true);
+          }
+        });
+
+        stopRecBtn.addEventListener('click', () => recognition.stop());
+      }
+
+      copyBtn.addEventListener('click', async () => {
+        const text = sttResult.value.trim();
+        if (!text) {
+          setStatus(sttStatus, 'Нет текста для копирования.', true);
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(text);
+          setStatus(sttStatus, 'Текст скопирован в буфер обмена.');
+        } catch {
+          setStatus(sttStatus, 'Не удалось скопировать текст.', true);
+        }
+      });
+    </script>
+  </body>
+</html>
