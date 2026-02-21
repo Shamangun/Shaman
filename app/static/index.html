@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Multi-LLM Connector</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; background: #111827; color: #e5e7eb; }
+      h1, h2, h3 { margin-bottom: 8px; }
+      .card { background: #1f2937; padding: 16px; border-radius: 12px; margin-bottom: 16px; }
+      input, select, textarea, button { width: 100%; padding: 8px; margin-top: 6px; margin-bottom: 10px; border-radius: 8px; border: none; }
+      button { background: #2563eb; color: white; cursor: pointer; }
+      button:hover { background: #1d4ed8; }
+      .providers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+      .provider-item { background: #374151; padding: 12px; border-radius: 10px; }
+      .response { white-space: pre-wrap; background: #0f172a; padding: 10px; border-radius: 8px; margin-top: 8px; }
+      .ok { border-left: 4px solid #22c55e; }
+      .err { border-left: 4px solid #ef4444; }
+      .mode { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+      .mode label { background: #374151; padding: 10px; border-radius: 8px; }
+      .row { display: grid; grid-template-columns: 1fr 140px; gap: 10px; align-items: end; }
+      .timeline-item { border-left: 3px solid #60a5fa; padding-left: 10px; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>Multi-LLM Connector</h1>
+    <p>Один интерфейс для диалога с GPT/Claude/Gemini одновременно, включая режим “AI говорят друг с другом”.</p>
+
+    <div class="card">
+      <h2>Добавить/обновить провайдер</h2>
+      <input id="pid" placeholder="ID (например gpt-main)" />
+      <input id="pname" placeholder="Название (например GPT-4o)" />
+      <select id="pkind">
+        <option value="openai">OpenAI-compatible (GPT)</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="gemini">Google Gemini</option>
+      </select>
+      <input id="pmodel" placeholder="Модель (gpt-4o-mini / claude-3-5-sonnet-latest / gemini-1.5-pro)" />
+      <input id="pkey" type="password" placeholder="API key" />
+      <input id="pbase" placeholder="Base URL (опционально для прокси/совместимых API)" />
+      <button onclick="saveProvider()">Сохранить провайдер</button>
+    </div>
+
+    <div class="card">
+      <h2>Провайдеры</h2>
+      <div id="providerList" class="providers"></div>
+    </div>
+
+    <div class="card">
+      <h2>Диалог</h2>
+      <div class="mode">
+        <label><input type="radio" name="chatMode" value="fanout" checked /> Один запрос всем (параллельно)</label>
+        <label><input type="radio" name="chatMode" value="relay" /> AI отвечают друг другу по очереди</label>
+      </div>
+
+      <textarea id="message" rows="4" placeholder="Введите тему/сообщение"></textarea>
+      <div class="row">
+        <div>
+          <label for="rounds">Раунды (для режима relay)</label>
+          <input id="rounds" type="number" min="1" max="8" value="2" />
+        </div>
+        <button onclick="sendMessage()">Запустить</button>
+      </div>
+      <div id="responses"></div>
+    </div>
+
+    <script>
+      function getMode() {
+        const checked = document.querySelector('input[name="chatMode"]:checked');
+        return checked ? checked.value : 'fanout';
+      }
+
+      async function fetchProviders() {
+        const res = await fetch('/api/providers');
+        const providers = await res.json();
+        const container = document.getElementById('providerList');
+        container.innerHTML = '';
+
+        providers.forEach((p) => {
+          const item = document.createElement('div');
+          item.className = 'provider-item';
+          item.innerHTML = `
+            <label><input type="checkbox" class="pcheck" value="${p.id}" /> ${p.name}</label>
+            <div><small>${p.kind} • ${p.model}</small></div>
+            <button onclick="removeProvider('${p.id}')">Удалить</button>
+          `;
+          container.appendChild(item);
+        });
+      }
+
+      async function saveProvider() {
+        const payload = {
+          id: document.getElementById('pid').value.trim(),
+          name: document.getElementById('pname').value.trim(),
+          kind: document.getElementById('pkind').value,
+          model: document.getElementById('pmodel').value.trim(),
+          api_key: document.getElementById('pkey').value.trim(),
+          base_url: document.getElementById('pbase').value.trim() || null,
+        };
+
+        const res = await fetch('/api/providers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          alert('Ошибка сохранения провайдера');
+          return;
+        }
+
+        document.getElementById('pkey').value = '';
+        fetchProviders();
+      }
+
+      async function removeProvider(id) {
+        await fetch(`/api/providers/${id}`, { method: 'DELETE' });
+        fetchProviders();
+      }
+
+      function getSelectedProviders() {
+        return Array.from(document.querySelectorAll('.pcheck:checked')).map((x) => x.value);
+      }
+
+      function ensureInputs(provider_ids, message, mode) {
+        if (provider_ids.length === 0) {
+          alert('Выберите хотя бы один провайдер');
+          return false;
+        }
+        if (!message) {
+          alert('Введите сообщение');
+          return false;
+        }
+        if (mode === 'relay' && provider_ids.length < 2) {
+          alert('Для диалога AI между собой выберите минимум 2 провайдера');
+          return false;
+        }
+        return true;
+      }
+
+      function renderFanout(data) {
+        const responses = document.getElementById('responses');
+        responses.innerHTML = '';
+        data.forEach((r) => {
+          const block = document.createElement('div');
+          block.className = `response ${r.ok ? 'ok' : 'err'}`;
+          block.innerHTML = `<strong>${r.provider_name}</strong>\n${r.text}`;
+          responses.appendChild(block);
+        });
+      }
+
+      function renderRelay(data) {
+        const responses = document.getElementById('responses');
+        responses.innerHTML = '<h3>Таймлайн диалога моделей</h3>';
+        data.forEach((item) => {
+          const block = document.createElement('div');
+          block.className = `response timeline-item ${item.ok ? 'ok' : 'err'}`;
+          block.innerHTML = `<strong>Раунд ${item.round_index}: ${item.provider_name}</strong>\n${item.text}`;
+          responses.appendChild(block);
+        });
+      }
+
+      async function sendMessage() {
+        const provider_ids = getSelectedProviders();
+        const message = document.getElementById('message').value.trim();
+        const mode = getMode();
+        const rounds = parseInt(document.getElementById('rounds').value || '2', 10);
+
+        if (!ensureInputs(provider_ids, message, mode)) {
+          return;
+        }
+
+        const responses = document.getElementById('responses');
+        responses.innerHTML = '<p>Запрос отправлен, ждём ответы...</p>';
+
+        const endpoint = mode === 'relay' ? '/api/chat/relay' : '/api/chat';
+        const body = mode === 'relay'
+          ? { topic: message, provider_ids, rounds }
+          : { message, provider_ids };
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          responses.innerHTML = `<div class="response err">Ошибка: ${err}</div>`;
+          return;
+        }
+
+        const data = await res.json();
+        if (mode === 'relay') {
+          renderRelay(data);
+        } else {
+          renderFanout(data);
+        }
+      }
+
+      fetchProviders();
+    </script>
+  </body>
+</html>
